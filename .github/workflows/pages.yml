@@ -1,0 +1,68 @@
+name: Deploy to GitHub Pages
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Validate standalone page
+        run: |
+          node --input-type=commonjs -e '
+            const fs = require("node:fs");
+            const html = fs.readFileSync("index.html", "utf8");
+            if (!/<html\s+lang="es">/.test(html)) throw new Error("index.html must declare Spanish as its language");
+            const script = html.match(/<script>([\s\S]*?)<\/script>/);
+            if (!script) throw new Error("index.html must contain its standalone application script");
+            new Function(script[1]);
+            console.log("index.html and embedded JavaScript are valid");
+          '
+
+  deploy:
+    if: github.event_name != 'pull_request'
+    needs: validate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v5
+
+      - name: Prepare site artifact
+        run: |
+          mkdir _site
+          cp index.html _site/index.html
+
+      - name: Upload site artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
