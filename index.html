@@ -200,6 +200,34 @@
     .history-amount { flex: none; font-weight: 700; }
     .history-amount.debt { color: var(--danger); }
     .history-amount.payment { color: var(--accent); }
+    .history-delete {
+      flex: none;
+      min-height: 40px;
+      padding: 7px 11px;
+      border: 1px solid var(--danger);
+      border-radius: 9px;
+      background: var(--danger-soft);
+      color: var(--danger);
+      font-weight: 650;
+    }
+    .history-delete:hover { background: color-mix(in srgb, var(--danger) 14%, var(--danger-soft)); }
+    dialog {
+      width: min(440px, calc(100% - 32px));
+      padding: 22px;
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      background: var(--surface);
+      color: var(--text);
+      box-shadow: var(--shadow);
+    }
+    dialog::backdrop { background: rgb(12 20 15 / 58%); }
+    dialog h2 { margin: 0; font-size: 19px; }
+    dialog p { margin: 10px 0 20px; color: var(--muted); }
+    .dialog-actions { display: flex; justify-content: flex-end; gap: 10px; }
+    .dialog-actions button { min-height: 44px; padding: 9px 15px; border-radius: 10px; font: inherit; font-weight: 650; }
+    .dialog-cancel { border: 1px solid var(--border); background: var(--surface-soft); color: var(--text); }
+    .dialog-confirm { border: 1px solid var(--danger); background: var(--danger-soft); color: var(--danger); }
+    .dialog-actions button:focus-visible, .history-delete:focus-visible { outline: 3px solid color-mix(in srgb, var(--accent) 45%, transparent); outline-offset: 2px; }
     .empty-state { padding: 34px 20px; color: var(--muted); text-align: center; }
     .empty-state strong { display: block; margin-bottom: 5px; color: var(--text); }
     .empty-illustration { display: grid; width: 48px; height: 48px; place-items: center; margin: 0 auto 12px; border-radius: 16px; background: var(--accent-soft); font-size: 22px; }
@@ -281,6 +309,14 @@
     </main>
   </div>
   <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+  <dialog id="delete-dialog" aria-labelledby="delete-title" aria-describedby="delete-description">
+    <h2 id="delete-title">¿Eliminar este movimiento?</h2>
+    <p id="delete-description"></p>
+    <div class="dialog-actions">
+      <button id="cancel-delete" class="dialog-cancel" type="button">Cancelar</button>
+      <button id="confirm-delete" class="dialog-confirm" type="button">Eliminar movimiento</button>
+    </div>
+  </dialog>
 
   <script>
     (() => {
@@ -300,12 +336,17 @@
         clients: document.getElementById("client-list"),
         detail: document.getElementById("detail-panel"),
         clientForm: document.getElementById("client-form"),
-        toast: document.getElementById("toast")
+        toast: document.getElementById("toast"),
+        deleteDialog: document.getElementById("delete-dialog"),
+        deleteDescription: document.getElementById("delete-description"),
+        cancelDelete: document.getElementById("cancel-delete"),
+        confirmDelete: document.getElementById("confirm-delete")
       };
 
       let state = { clients: [] };
       let selectedId = null;
       let toastTimer;
+      let pendingDelete = null;
 
       elements.today.textContent = new Intl.DateTimeFormat("es-PE", { dateStyle: "medium" }).format(today);
 
@@ -408,6 +449,7 @@
                   <div class="history-meta">${isDebt ? "Fiado" : "Pago"} · ${formatDate(entry.date)}</div>
                 </div>
                 <div class="history-amount ${isDebt ? "debt" : "payment"}">${isDebt ? "+" : "−"} ${formatMoney(entry.amount)}</div>
+                <button class="history-delete" type="button" data-entry-id="${escapeHtml(entry.id)}" aria-label="Eliminar ${isDebt ? "fiado" : "pago"}: ${escapeHtml(entry.description)}, ${formatMoney(entry.amount)}">Eliminar</button>
               </li>`;
           }).join("")}</ul>`
           : `<div class="empty-state">Todavía no hay movimientos para este cliente.</div>`;
@@ -497,6 +539,46 @@
         }
       }
 
+      function requestDeleteEntry(clientId, entryId) {
+        const client = state.clients.find(item => item.id === clientId);
+        const entry = client?.entries.find(item => item.id === entryId);
+        if (!client || !entry) return;
+
+        const movementType = entry.type === "debt" ? "fiado" : "pago";
+        elements.deleteDescription.textContent =
+          `¿Deseas eliminar el ${movementType} «${entry.description}» de ${formatMoney(entry.amount)} del ${formatDate(entry.date)} para ${client.name}? Esta acción no se puede deshacer.`;
+        pendingDelete = { clientId, entryId };
+        elements.deleteDialog.showModal();
+      }
+
+      function deleteEntry(clientId, entryId) {
+        const client = state.clients.find(item => item.id === clientId);
+        if (!client || !client.entries.some(entry => entry.id === entryId)) return false;
+
+        const entries = client.entries.filter(entry => entry.id !== entryId);
+        const nextBalance = getBalance({ ...client, entries });
+        if (nextBalance < 0) {
+          elements.deleteDialog.close();
+          showToast("No se puede borrar este fiado porque los pagos superarían el saldo restante. Corrige primero los pagos.");
+          return false;
+        }
+
+        const nextState = {
+          ...state,
+          clients: state.clients.map(item => item.id === clientId ? { ...item, entries } : item)
+        };
+        if (!saveState(nextState)) {
+          elements.deleteDialog.close();
+          return false;
+        }
+
+        elements.deleteDialog.close();
+        render();
+        elements.clients.querySelector(`[data-client-id="${CSS.escape(clientId)}"]`)?.focus();
+        showToast("Movimiento eliminado.");
+        return true;
+      }
+
       elements.clientForm.addEventListener("submit", event => {
         event.preventDefault();
         const data = new FormData(elements.clientForm);
@@ -523,12 +605,23 @@
         selectedId = button.dataset.clientId;
         render();
       });
+      elements.detail.addEventListener("click", event => {
+        const button = event.target.closest("[data-entry-id]");
+        if (!button) return;
+        requestDeleteEntry(selectedId, button.dataset.entryId);
+      });
       elements.detail.addEventListener("submit", event => {
         const form = event.target.closest("form[data-type]");
         if (!form) return;
         event.preventDefault();
         addEntry(selectedId, form.dataset.type, form);
       });
+      elements.cancelDelete.addEventListener("click", () => elements.deleteDialog.close());
+      elements.confirmDelete.addEventListener("click", () => {
+        if (!pendingDelete) return;
+        deleteEntry(pendingDelete.clientId, pendingDelete.entryId);
+      });
+      elements.deleteDialog.addEventListener("close", () => { pendingDelete = null; });
 
       state = readState();
       render();
