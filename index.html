@@ -23,6 +23,9 @@
       --debt-soft: #fff0ee;
       --clear: #1b6b42;
       --clear-soft: #e9f4ec;
+      --whatsapp: #176b3a;
+      --whatsapp-hover: #10552d;
+      --whatsapp-soft: #e9f4ec;
       --shadow: 0 8px 26px rgb(28 49 35 / 6%);
       font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
       font-synthesis: none;
@@ -46,6 +49,9 @@
         --debt-soft: #432724;
         --clear: #7bd39a;
         --clear-soft: #253b2d;
+        --whatsapp: #82d99e;
+        --whatsapp-hover: #a1e9b6;
+        --whatsapp-soft: #253b2d;
         --shadow: 0 8px 26px rgb(0 0 0 / 18%);
       }
     }
@@ -181,6 +187,25 @@
     .balance-chip { flex: none; padding: 7px 10px; border-radius: 10px; font-size: 13px; font-weight: 750; }
     .balance-chip.debt { background: var(--debt-soft); color: var(--debt); }
     .balance-chip.clear { background: var(--clear-soft); color: var(--clear); }
+    .whatsapp-action { display: grid; justify-items: start; gap: 5px; margin-top: 12px; }
+    .whatsapp-button {
+      display: inline-flex;
+      min-height: 44px;
+      align-items: center;
+      justify-content: center;
+      padding: 9px 13px;
+      border: 1px solid var(--whatsapp);
+      border-radius: 10px;
+      background: var(--whatsapp);
+      color: var(--surface);
+      font-weight: 700;
+      text-align: center;
+      text-decoration: none;
+    }
+    .whatsapp-button:hover { border-color: var(--whatsapp-hover); background: var(--whatsapp-hover); }
+    .whatsapp-button:focus-visible { outline: 3px solid color-mix(in srgb, var(--accent) 45%, transparent); outline-offset: 2px; }
+    .whatsapp-button:disabled { border-color: var(--border); background: var(--surface-soft); color: var(--muted); cursor: not-allowed; }
+    .whatsapp-help { max-width: 420px; color: var(--muted); font-size: 12px; }
     .transaction-forms { display: grid; grid-template-columns: 1fr 1fr; gap: 11px; margin-top: 18px; }
     .transaction-form { padding: 13px; border: 1px solid var(--border); border-radius: 13px; background: var(--surface-soft); }
     .transaction-form.payment { background: var(--surface); }
@@ -402,6 +427,34 @@
         })[character]);
       }
 
+      function normalizePeruvianMobile(value) {
+        const compact = String(value || "").replace(/[ -]/g, "");
+        if (/^9\d{8}$/.test(compact)) return `51${compact}`;
+        const withCountryCode = /^(?:\+?51)(9\d{8})$/.exec(compact);
+        return withCountryCode ? `51${withCountryCode[1]}` : null;
+      }
+
+      function renderWhatsAppAction(client, balance) {
+        if (balance <= 0) return "";
+
+        const phone = normalizePeruvianMobile(client.phone);
+        if (!phone) {
+          return `
+            <div class="whatsapp-action">
+              <button class="whatsapp-button" type="button" disabled aria-describedby="whatsapp-phone-help">Enviar recordatorio por WhatsApp</button>
+              <span class="whatsapp-help" id="whatsapp-phone-help">El teléfono guardado no tiene un formato válido para WhatsApp. Revisa que sea un celular peruano de 9 dígitos que empieza con 9.</span>
+            </div>`;
+        }
+
+        const message = `Hola ${client.name}, le saluda su bodega. Le recordamos amablemente que tiene un saldo pendiente de ${formatMoney(balance)}. ¡Gracias por su preferencia!`;
+        const href = `https://wa.me/${phone}?text=${encodeURIComponent(message)}`;
+        return `
+          <div class="whatsapp-action">
+            <a class="whatsapp-button" href="${href}" target="_blank" rel="noopener noreferrer" aria-label="Enviar recordatorio por WhatsApp a ${escapeHtml(client.name)}. Se abrirá en una pestaña nueva.">Enviar recordatorio por WhatsApp ↗</a>
+            <span class="whatsapp-help">Se abrirá WhatsApp para que revises y envíes el mensaje.</span>
+          </div>`;
+      }
+
       function renderClients() {
         const query = elements.search.value.trim().toLocaleLowerCase("es");
         const clients = state.clients.filter(client => client.name.toLocaleLowerCase("es").includes(query));
@@ -463,6 +516,7 @@
               </div>
               <div class="balance-chip ${hasDebt ? "debt" : "clear"}" role="status" aria-label="${hasDebt ? `Saldo pendiente ${formatMoney(balance)}` : "Al día, saldo S/ 0.00"}">${hasDebt ? `${formatMoney(balance)} pendiente` : "Al día"}</div>
             </div>
+            ${renderWhatsAppAction(client, balance)}
             <div class="transaction-forms">
               <form class="transaction-form" data-type="debt">
                 <h3>＋ Registrar fiado</h3>
@@ -586,6 +640,10 @@
         const phone = String(data.get("phone") || "").trim();
         if (!name || !phone) {
           showToast("Ingresa el nombre y teléfono del cliente.");
+          return;
+        }
+        if (!normalizePeruvianMobile(phone)) {
+          showToast("Ingresa un celular peruano válido: 9 dígitos que empiecen con 9, con o sin espacios, guiones o prefijo +51.");
           return;
         }
         const client = { id: crypto.randomUUID(), name, phone, entries: [] };
